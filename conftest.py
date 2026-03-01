@@ -5,6 +5,7 @@ Mirrors the driver setup from demo/driver.py but exposes it as a
 pytest fixture so every test file can request it via dependency injection.
 """
 
+import os
 import time
 import pytest
 from appium import webdriver
@@ -23,6 +24,13 @@ def get_options() -> UiAutomator2Options:
     options.automation_name = "UiAutomator2"
     options.no_reset = True          # preserve app data; skip onboarding
     options.force_app_launch = True  # always restart app to home screen per session
+
+    # In CI the app is NOT pre-installed.  When TASKS_APK_PATH is set, tell
+    # Appium where the APK is so it can install it on the fresh emulator.
+    apk_path = os.environ.get("TASKS_APK_PATH")
+    if apk_path:
+        options.app = apk_path
+
     return options
 
 
