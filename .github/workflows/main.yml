@@ -1,27 +1,6 @@
 # .github/workflows/main.yml
-#
-# CI pipeline for the Tasks.org Mobile Test Automation Framework.
-#
-# Triggers:
-#   - Every push to main
-#   - Every pull request targeting main
-#
-# What it does:
-#   1. Checks out the repository.
-#   2. Sets up the required Python version.
-#   3. Installs Python dependencies (Appium-Python-Client, pytest, pytest-html …).
-#   4. Sets up the Android SDK / emulator (via the reactivecircus/android-emulator-runner
-#      action) — no manual SDK installation needed.
-#   5. Installs Node.js and the Appium server + UiAutomator2 driver.
-#   6. Starts Appium in the background and waits until it is ready.
-#   7. Runs the full pytest suite and always uploads the HTML report as an artifact.
-#
-# NOTE: Full end-to-end Android emulator tests are resource-intensive.
-#       The android-emulator-runner action takes care of creating and booting
-#       the AVD inside the GitHub-hosted runner.  We use an Ubuntu runner with
-#       KVM hardware-acceleration (x86_64); all macOS runners are now Apple
-#       Silicon and cannot run x86_64 emulators.
 name: Mobile Automation Tests
+
 on:
   push:
     branches:
@@ -29,91 +8,61 @@ on:
   pull_request:
     branches:
       - main
+
 jobs:
-  # ---------------------------------------------------------------------------
-  # Job: run-appium-tests
-  # ---------------------------------------------------------------------------
   run-appium-tests:
     name: Run Pytest + Appium on Android Emulator
-    # Ubuntu runners are x86_64 and support KVM for hardware-accelerated emulators.
-    # All macOS runners (including macos-13) are now Apple Silicon (aarch64) and
-    # cannot run x86_64 Android system images.
     runs-on: ubuntu-latest
+
     steps:
-      # -----------------------------------------------------------------------
-      # 1. Check out source code
-      # -----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
-      # -----------------------------------------------------------------------
-      # 2. Enable KVM for hardware-accelerated Android emulator
-      # -----------------------------------------------------------------------
+
       - name: Enable KVM group permissions
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      # -----------------------------------------------------------------------
-      # 3. Set up Python
-      # -----------------------------------------------------------------------
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"            # cache pip dependencies between runs
-      # -----------------------------------------------------------------------
-      # 4. Install Python dependencies
-      # -----------------------------------------------------------------------
+          cache: "pip"
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      # -----------------------------------------------------------------------
-      # 5. Set up Java (required by the Android SDK tools)
-      # -----------------------------------------------------------------------
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
-      # -----------------------------------------------------------------------
-      # 6. Set up Node.js (required by Appium)
-      # -----------------------------------------------------------------------
+
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-      # -----------------------------------------------------------------------
-      # 7. Install Appium server and the UiAutomator2 driver
-      # -----------------------------------------------------------------------
+
       - name: Install Appium and UiAutomator2 driver
         run: |
           npm install -g appium@latest
           appium driver install uiautomator2
-      # -----------------------------------------------------------------------
-      # 8. Download the Tasks.org APK from F-Droid
-      #    The APK is >25 MB so we do NOT commit it to Git.  Instead we
-      #    download the exact version used for testing at CI time.
-      # -----------------------------------------------------------------------
+
       - name: Download Tasks.org APK
         run: |
           wget -q -O org.tasks_141400.apk \
             "https://f-droid.org/repo/org.tasks_141400.apk"
           ls -lh org.tasks_141400.apk
-      # -----------------------------------------------------------------------
-      # 9. Boot Android emulator and run tests
-      #    The android-emulator-runner action:
-      #      - Installs required system images automatically.
-      #      - Creates an AVD, boots it, waits for the boot animation to finish.
-      #      - Runs the specified script with the emulator available.
-      #    KVM is enabled above so the emulator runs with hardware acceleration.
-      # -----------------------------------------------------------------------
+
       - name: Run Appium tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 33              # Android 13 — matches conftest.py platform_version
-          target: google_apis        # Google APIs image (needed for many apps)
-          arch: x86_64               # x86_64 — matches Ubuntu runner architecture
+          api-level: 33
+          target: google_apis
+          arch: x86_64
           profile: Nexus 6
           avd-name: test_avd
           emulator-options: >-
@@ -125,71 +74,59 @@ jobs:
           disable-animations: true
           script: |
             set -e
-            # ── Step 1: gain root access (always available on google_apis images) ──
+
+            # ── Step 1: gain root access ──────────────────────────────────────
             adb root || true
             sleep 3
-            # ── Step 2: install the APK ──────────────────────────────────────────
+
+            # ── Step 2: install the APK ───────────────────────────────────────
             adb -s emulator-5554 install -r "${GITHUB_WORKSPACE}/org.tasks_141400.apk"
-            # ── Step 3: pre-grant runtime permissions ────────────────────────────
+
+            # ── Step 3: pre-grant runtime permissions ─────────────────────────
             adb -s emulator-5554 shell pm grant org.tasks android.permission.POST_NOTIFICATIONS
-            # ── Step 4: skip first-run onboarding via SharedPreferences ──────────
-            # Write p_first_start=false and fix file ownership so the app
-            # UID can actually read it (push as root creates root-owned files).
+
+            # ── Step 4: skip first-run onboarding via SharedPreferences ───────
             adb -s emulator-5554 shell mkdir -p /data/data/org.tasks/shared_prefs
             printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n<boolean name="p_first_start" value="false" />\n</map>\n' > /tmp/org_tasks_prefs.xml
             adb -s emulator-5554 push /tmp/org_tasks_prefs.xml /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
             adb -s emulator-5554 shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml'
             adb -s emulator-5554 shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs'
-            echo '=== SharedPreferences written (with correct ownership) ==='
-            # ── Step 5: return adbd to non-root mode ─────────────────────────────
+            echo '=== SharedPreferences written ==='
+
+            # ── Step 5: return adbd to non-root mode ──────────────────────────
             adb unroot || true
             sleep 2
-            # ── Step 5.1: ensure device is online post-unroot ────────────────
             adb -s emulator-5554 wait-for-device
             adb -s emulator-5554 shell getprop sys.boot_completed
             sleep 2
-            # ── Step 5.2: pre-launch app and dismiss onboarding via adb ────────
-            # Belt-and-suspenders: in addition to SharedPreferences, launch the
-            # app and tap through the first-run onboarding before Appium starts.
-            # The conftest _dismiss_onboarding() in pytest is the primary
-            # mechanism; these taps are a best-effort backup.
+
+            # ── Step 5.2: pre-launch app and dismiss onboarding ───────────────
             adb -s emulator-5554 shell am start -n org.tasks/com.todoroo.astrid.activity.MainActivity
             sleep 10
-            echo '=== UI dump before onboarding dismissal ==='
-            adb -s emulator-5554 shell uiautomator dump /sdcard/ui_before.xml || true
-            adb -s emulator-5554 shell cat /sdcard/ui_before.xml || true
+
             adb -s emulator-5554 shell input tap 540 1700
             sleep 3
             adb -s emulator-5554 shell input tap 540 1700
             sleep 3
             adb -s emulator-5554 shell input tap 540 1700
             sleep 3
-            echo '=== UI dump after taps ==='
-            adb -s emulator-5554 shell uiautomator dump /sdcard/ui_after.xml || true
-            adb -s emulator-5554 shell cat /sdcard/ui_after.xml || true
+
             adb -s emulator-5554 shell am force-stop org.tasks
             sleep 2
+
+            # ── Step 5.3: pre-test screenshot ─────────────────────────────────
             adb -s emulator-5554 shell screencap -p /sdcard/pre_test.png
-            adb -s emulator-5554 pull /sdcard/pre_test.png pre_test.png || true
-            echo '=== App pre-launch + onboarding dismissal done ==='
-            # ── Step 5.3: start Appium server (only started here, not in a prior step) ──
-            appium --log appium.log --log-level info &
+            adb -s emulator-5554 pull /sdcard/pre_test.png "${GITHUB_WORKSPACE}/pre_test.png" || true
+            echo '=== Pre-launch done ==='
+
+            # ── Step 5.4: start Appium ────────────────────────────────────────
+            appium --log "${GITHUB_WORKSPACE}/appium.log" --log-level info &
             sleep 20
             curl -sSf http://127.0.0.1:4723/status && echo "Appium is ready." || echo "WARNING: Appium health-check failed"
-            # ── Step 6: run the test suite ───────────────────────────────────────
-            # -s flag makes print() output visible in CI logs (for debugging)
+
+            # ── Step 6: run the test suite ────────────────────────────────────
             pytest tests/ -v -s --html=reports/report.html --self-contained-html
-            # NOTE: Do NOT manually kill the emulator here.
-            # android-emulator-runner@v2 has its own "Terminate Emulator" post-step
-            # that cleanly shuts it down after the script exits.  Calling
-            # "adb emu kill" before that causes a race condition: the emulator
-            # enters a 20-second graceful-shutdown window and is still alive (but
-            # dying) when the runner fires its cleanup, which produces:
-            #   "Error: The operation was canceled."
-            # Letting the runner handle teardown avoids this entirely.
-      # -----------------------------------------------------------------------
-      # 11. Upload pytest-html report as a build artifact (always runs)
-      # -----------------------------------------------------------------------
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
@@ -197,9 +134,7 @@ jobs:
           name: pytest-html-report
           path: reports/report.html
           retention-days: 14
-      # -----------------------------------------------------------------------
-      # 12. Upload Appium log for debugging on failure
-      # -----------------------------------------------------------------------
+
       - name: Upload Appium log
         if: failure()
         uses: actions/upload-artifact@v4
@@ -207,10 +142,7 @@ jobs:
           name: appium-log
           path: appium.log
           retention-days: 7
-      # -----------------------------------------------------------------------
-      # 13. Upload pre-test screenshot (always) — shows what screen the app
-      #     was on when Appium started; invaluable for debugging CI failures.
-      # -----------------------------------------------------------------------
+
       - name: Upload pre-test screenshot
         if: always()
         uses: actions/upload-artifact@v4
@@ -218,21 +150,3 @@ jobs:
           name: pre-test-screenshot
           path: pre_test.png
           retention-days: 7
-      # -----------------------------------------------------------------------
-      # 14. Upload UI dump XMLs for debugging onboarding issues
-      # -----------------------------------------------------------------------
-      - name: Pull UI dump XMLs
-        if: always()
-        run: |
-          adb -s emulator-5554 pull /sdcard/ui_before.xml ui_before.xml || true
-          adb -s emulator-5554 pull /sdcard/ui_after.xml ui_after.xml || true
-      - name: Upload UI dumps
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-dumps
-          path: |
-            ui_before.xml
-            ui_after.xml
-          retention-days: 7
-
