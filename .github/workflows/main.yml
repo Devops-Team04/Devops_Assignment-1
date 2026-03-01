@@ -169,7 +169,15 @@ jobs:
             adb -s emulator-5554 shell getprop sys.boot_completed
             sleep 2
 
-            # ── Step 5.2: start Appium server (only started here, not in a prior step) ──
+            # ── Step 5.2: pre-launch app once via adb so it initialises past any ──
+            # remaining first-run screens before Appium even connects.
+            adb -s emulator-5554 shell am start -n org.tasks/com.todoroo.astrid.activity.MainActivity
+            sleep 15
+            adb -s emulator-5554 shell screencap -p /sdcard/pre_test.png
+            adb -s emulator-5554 pull /sdcard/pre_test.png pre_test.png || true
+            echo '=== App pre-launch done ==='
+
+            # ── Step 5.3: start Appium server (only started here, not in a prior step) ──
             appium --log appium.log --log-level info &
             sleep 20
             curl -sSf http://127.0.0.1:4723/status && echo "Appium is ready." || echo "WARNING: Appium health-check failed"
@@ -197,4 +205,16 @@ jobs:
         with:
           name: appium-log
           path: appium.log
+          retention-days: 7
+
+      # -----------------------------------------------------------------------
+      # 13. Upload pre-test screenshot (always) — shows what screen the app
+      #     was on when Appium started; invaluable for debugging CI failures.
+      # -----------------------------------------------------------------------
+      - name: Upload pre-test screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-test-screenshot
+          path: pre_test.png
           retention-days: 7

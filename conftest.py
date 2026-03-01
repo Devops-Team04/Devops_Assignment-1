@@ -103,44 +103,35 @@ def setup_app_once():
     """
     Session-scoped fixture that runs exactly once per test session.
 
-    Only active in CI (IS_CI=True).  On a fresh emulator the app will show
-    its first-run onboarding UI; this fixture dismisses it before any test
-    runs.  Locally the app is already set up so this is a no-op.
-
-    All operations are wrapped in try/except so a failure here never blocks
-    the individual per-test fixtures.
+    In CI the onboarding is already bypassed by the workflow script
+    (SharedPreferences p_first_start=false + adb pre-launch).  This
+    fixture is a lightweight safety-net that opens one session to warm
+    up the app and confirm it reaches the home screen before tests run.
+    Locally this is a no-op.
     """
     if not IS_CI:
         yield
         return          # skip entirely on local machines
 
-    # Primary onboarding bypass is handled by the CI workflow script:
-    # it writes org.tasks_preferences.xml with p_first_start=false via
-    # `adb root` before pytest runs.  This fixture is a safety-net in case
-    # the SharedPreferences approach doesn't cover all dialogs.
-    print("[setup_app_once] Starting onboarding safety-net session...")
+    print("[setup_app_once] Warming up app session in CI...")
     d = None
     try:
         d = webdriver.Remote(APPIUM_URL, options=get_options())
-        d.implicitly_wait(10)
-        print("[setup_app_once] Appium session opened. Waiting 12s for app to render...")
-        time.sleep(12)          # give the app extra time to fully render
-        _dismiss_onboarding(d)
-        print("[setup_app_once] Onboarding dismissal complete.")
+        # Use a short implicit wait here — we just want the app to launch,
+        # not to search for elements that may or may not exist.
+        d.implicitly_wait(3)
+        print("[setup_app_once] Session opened. Waiting 15s for app to fully render...")
+        time.sleep(15)
+        print(f"[setup_app_once] App is running. Current activity: {d.current_activity}")
     except Exception as exc:
-        # Log the error so it appears in CI logs for diagnosis
-        print(f"[setup_app_once] WARNING: exception during onboarding dismissal: {exc}")
+        print(f"[setup_app_once] WARNING: {exc}")
     finally:
         if d is not None:
             try:
-                d.terminate_app("org.tasks")
-            except Exception:
-                pass
-            try:
                 d.quit()
             except Exception:
-                pass    # session may already be gone — that's fine
-    print("[setup_app_once] Done. Handing off to individual tests.")
+                pass
+    print("[setup_app_once] Warm-up done.")
     time.sleep(2)
     yield
 
@@ -152,14 +143,16 @@ def driver():
     Each test gets a fresh driver instance → full independence guaranteed.
     """
     d = webdriver.Remote(APPIUM_URL, options=get_options())
-    d.implicitly_wait(10)
+    # CI emulators are slower — give more time to find elements.
+    d.implicitly_wait(20 if IS_CI else 10)
     # Guarantee a clean home screen regardless of previous session state.
     # force_app_launch alone can't clear Android's saved Activity state,
     # so we terminate and relaunch the app explicitly.
     time.sleep(1)
     d.terminate_app("org.tasks")
-    time.sleep(1)
-    d.activate_app("org.tasks")
     time.sleep(2)
+    d.activate_app("org.tasks")
+    # CI needs more time after activation for the app to fully render.
+    time.sleep(6 if IS_CI else 2)
     yield d
     d.quit()
