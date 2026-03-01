@@ -152,7 +152,9 @@ jobs:
             -noaudio
             -no-boot-anim
           disable-animations: true
-          script: TASKS_APK_PATH="${GITHUB_WORKSPACE}/org.tasks_141400.apk" pytest tests/ -v --html=reports/report.html --self-contained-html
+          script: >-
+            adb -s emulator-5554 install -r "${GITHUB_WORKSPACE}/org.tasks_141400.apk" &&
+            pytest tests/ -v --html=reports/report.html --self-contained-html
 
       # -----------------------------------------------------------------------
       # 11. Upload pytest-html report as a build artifact (always runs)
