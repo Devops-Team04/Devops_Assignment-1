@@ -10,8 +10,12 @@ import time
 import pytest
 from appium import webdriver
 from appium.options.android import UiAutomator2Options
+from appium.webdriver.common.appiumby import AppiumBy
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
 APPIUM_URL = "http://127.0.0.1:4723"
+# Detect CI environment (set by GitHub Actions automatically)
+IS_CI = os.environ.get("CI", "").lower() == "true"
 
 
 def get_options() -> UiAutomator2Options:
@@ -24,14 +28,70 @@ def get_options() -> UiAutomator2Options:
     options.automation_name = "UiAutomator2"
     options.no_reset = True          # preserve app data; skip onboarding
     options.force_app_launch = True  # always restart app to home screen per session
-
-    # In CI the app is NOT pre-installed.  When TASKS_APK_PATH is set, tell
-    # Appium where the APK is so it can install it on the fresh emulator.
-    apk_path = os.environ.get("TASKS_APK_PATH")
-    if apk_path:
-        options.app = apk_path
+    # Auto-grant all runtime permission dialogs (e.g. notifications on Android 13)
+    options.auto_grant_permissions = True
 
     return options
+
+
+def _dismiss_onboarding(driver) -> None:
+    """
+    Attempt to dismiss any first-run dialogs / onboarding screens that
+    Tasks.org shows on a fresh install.  Tries common button labels;
+    safe to call even when no dialogs are present.
+    """
+    dismiss_texts = [
+        "GET IT", "Get it", "GET STARTED", "Get started",
+        "SKIP", "Skip", "OK", "Ok", "ALLOW", "Allow",
+        "CONTINUE", "Continue", "DONE", "Done",
+        "AGREE", "Agree", "NEXT", "Next", "ACCEPT", "Accept",
+    ]
+    for _ in range(8):          # up to 8 passes to clear stacked dialogs
+        dismissed = False
+        for label in dismiss_texts:
+            try:
+                btn = driver.find_element(
+                    AppiumBy.ANDROID_UIAUTOMATOR,
+                    f'new UiSelector().text("{label}")'
+                )
+                btn.click()
+                time.sleep(0.8)
+                dismissed = True
+                break
+            except (NoSuchElementException, Exception):
+                continue
+        if not dismissed:
+            break   # nothing left to dismiss
+    time.sleep(1)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_app_once():
+    """
+    Session-scoped fixture that runs exactly once per test session.
+
+    In CI the app is freshly installed and has never been launched, so
+    Tasks.org will show its first-run onboarding UI.  This fixture:
+      1. Opens one Appium session (no_reset=True, auto_grant_permissions=True)
+      2. Waits for the app to be ready
+      3. Dismisses any onboarding / permission dialogs
+      4. Quits the session
+
+    After this, all per-test driver fixtures start with the app already
+    initialised and land directly on the My Tasks home screen.
+    """
+    d = webdriver.Remote(APPIUM_URL, options=get_options())
+    try:
+        d.implicitly_wait(5)          # short wait — we just want to dismiss dialogs
+        time.sleep(5)                  # give the app time to fully render
+        _dismiss_onboarding(d)
+    finally:
+        try:
+            d.terminate_app("org.tasks")
+        except Exception:
+            pass
+        d.quit()
+    time.sleep(1)
 
 
 @pytest.fixture
