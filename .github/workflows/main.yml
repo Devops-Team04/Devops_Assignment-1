@@ -125,7 +125,7 @@ jobs:
         with:
           api-level: 33              # Android 13 — matches conftest.py platform_version
           target: google_apis        # Google APIs image (needed for many apps)
-          arch: x86_64
+          arch: arm64-v8a            # ARM64 — required for macos-latest (Apple Silicon runners)
           profile: Nexus 6
           avd-name: test_avd
           emulator-options: >-
