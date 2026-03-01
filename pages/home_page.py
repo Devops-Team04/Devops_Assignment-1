@@ -62,7 +62,14 @@ class HomePage(BasePage):
         return self.is_text_visible(task_title, timeout=5)
 
     def open_sidebar(self) -> None:
-        """Tap the hamburger button to open the navigation drawer."""
+        """Tap the hamburger button to open the navigation drawer.
+
+        Defensive: if the sidebar is already open (e.g. left open by a
+        previous test), close it first so the hamburger is reachable.
+        """
+        if self.is_accessibility_id_visible("Close navigation menu", timeout=2):
+            self.click_by_accessibility_id("Close navigation menu")
+            import time; time.sleep(0.5)
         self.driver.find_element(*self.HAMBURGER_BUTTON).click()
 
     def tap_search_button(self) -> None:
