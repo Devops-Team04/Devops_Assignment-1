@@ -18,9 +18,9 @@
 #
 # NOTE: Full end-to-end Android emulator tests are resource-intensive.
 #       The `android-emulator-runner` action takes care of creating and booting
-#       the AVD inside the GitHub-hosted macOS runner (required for hardware
-#       acceleration).  Linux runners can be used with software rendering but
-#       are significantly slower.
+#       the AVD inside the GitHub-hosted runner.  We use an Ubuntu runner with
+#       KVM hardware-acceleration (x86_64); all macOS runners are now Apple
+#       Silicon and cannot run x86_64 emulators.
 
 name: Mobile Automation Tests
 
@@ -38,8 +38,10 @@ jobs:
   # ---------------------------------------------------------------------------
   run-appium-tests:
     name: Run Pytest + Appium on Android Emulator
-    # macOS is required for hardware-accelerated Android emulation on GitHub Actions
-    runs-on: macos-latest
+    # Ubuntu runners are x86_64 and support KVM for hardware-accelerated emulators.
+    # All macOS runners (including macos-13) are now Apple Silicon (aarch64) and
+    # cannot run x86_64 Android system images.
+    runs-on: ubuntu-latest
 
     steps:
       # -----------------------------------------------------------------------
@@ -49,7 +51,16 @@ jobs:
         uses: actions/checkout@v4
 
       # -----------------------------------------------------------------------
-      # 2. Set up Python
+      # 2. Enable KVM for hardware-accelerated Android emulator
+      # -----------------------------------------------------------------------
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # -----------------------------------------------------------------------
+      # 3. Set up Python
       # -----------------------------------------------------------------------
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -58,7 +69,7 @@ jobs:
           cache: "pip"            # cache pip dependencies between runs
 
       # -----------------------------------------------------------------------
-      # 3. Install Python dependencies
+      # 4. Install Python dependencies
       # -----------------------------------------------------------------------
       - name: Install Python dependencies
         run: |
@@ -66,7 +77,7 @@ jobs:
           pip install -r requirements.txt
 
       # -----------------------------------------------------------------------
-      # 4. Set up Java (required by the Android SDK tools)
+      # 5. Set up Java (required by the Android SDK tools)
       # -----------------------------------------------------------------------
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -75,7 +86,7 @@ jobs:
           java-version: "17"
 
       # -----------------------------------------------------------------------
-      # 5. Set up Node.js (required by Appium)
+      # 6. Set up Node.js (required by Appium)
       # -----------------------------------------------------------------------
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -83,7 +94,7 @@ jobs:
           node-version: "20"
 
       # -----------------------------------------------------------------------
-      # 6. Install Appium server and the UiAutomator2 driver
+      # 7. Install Appium server and the UiAutomator2 driver
       # -----------------------------------------------------------------------
       - name: Install Appium and UiAutomator2 driver
         run: |
@@ -91,12 +102,23 @@ jobs:
           appium driver install uiautomator2
 
       # -----------------------------------------------------------------------
-      # 7. Start Appium server in the background
+      # 8. Download the Tasks.org APK from F-Droid
+      #    The APK is >25 MB so we do NOT commit it to Git.  Instead we
+      #    download the exact version used for testing at CI time.
+      # -----------------------------------------------------------------------
+      - name: Download Tasks.org APK
+        run: |
+          wget -q -O org.tasks_141400.apk \
+            "https://f-droid.org/repo/org.tasks_141400.apk"
+          ls -lh org.tasks_141400.apk
+
+      # -----------------------------------------------------------------------
+      # 9. Start Appium server in the background
       # -----------------------------------------------------------------------
       - name: Start Appium server
         run: |
           appium --log appium.log --log-level info &
-          # Wait until Appium is ready (macOS-compatible — no `timeout` command)
+          # Wait until Appium is ready
           for i in $(seq 1 15); do
             if curl -sSf http://127.0.0.1:4723/status > /dev/null 2>&1; then
               echo "Appium server is up."
@@ -108,24 +130,19 @@ jobs:
           echo "Appium did not start in time." && exit 1
 
       # -----------------------------------------------------------------------
-      # 8. Boot Android emulator and run tests
+      # 10. Boot Android emulator and run tests
       #    The `android-emulator-runner` action:
-      #      - Installs SDL2 + required system images automatically.
+      #      - Installs required system images automatically.
       #      - Creates an AVD, boots it, waits for the boot animation to finish.
       #      - Runs the specified `script` with the emulator available.
-      #
-      #    APK NOTE: The `app` capability in conftest.py points to a local path.
-      #    For CI, store the APK as a GitHub Actions secret (base64-encoded) or
-      #    upload it to a release asset, then decode it in a step before running
-      #    tests.  The placeholder below assumes the APK has been placed at
-      #    $GITHUB_WORKSPACE/app/tasks.apk via an earlier step or secret.
+      #    KVM is enabled above so the emulator runs with hardware acceleration.
       # -----------------------------------------------------------------------
       - name: Run Appium tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33              # Android 13 — matches conftest.py platform_version
           target: google_apis        # Google APIs image (needed for many apps)
-          arch: x86_64
+          arch: x86_64               # x86_64 — matches Ubuntu runner architecture
           profile: Nexus 6
           avd-name: test_avd
           emulator-options: >-
@@ -135,17 +152,12 @@ jobs:
             -noaudio
             -no-boot-anim
           disable-animations: true
-          script: |
-            # Override the APK path in conftest via environment variable so we
-            # do not have to hard-code a CI-specific path inside the source file.
-            export TASKS_APK_PATH="$GITHUB_WORKSPACE/org.tasks_141400.apk"
-            pytest tests/ \
-              -v \
-              --html=reports/report.html \
-              --self-contained-html
+          script: >-
+            adb -s emulator-5554 install -r "${GITHUB_WORKSPACE}/org.tasks_141400.apk" &&
+            pytest tests/ -v --html=reports/report.html --self-contained-html
 
       # -----------------------------------------------------------------------
-      # 9. Upload pytest-html report as a build artifact (always runs)
+      # 11. Upload pytest-html report as a build artifact (always runs)
       # -----------------------------------------------------------------------
       - name: Upload test report
         if: always()
@@ -156,7 +168,7 @@ jobs:
           retention-days: 14
 
       # -----------------------------------------------------------------------
-      # 10. Upload Appium log for debugging on failure
+      # 12. Upload Appium log for debugging on failure
       # -----------------------------------------------------------------------
       - name: Upload Appium log
         if: failure()
