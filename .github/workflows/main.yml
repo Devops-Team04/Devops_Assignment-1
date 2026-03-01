@@ -202,12 +202,10 @@ jobs:
             pytest tests/ -v -s --html=reports/report.html --self-contained-html
 
             # ── Step 7: force-stop emulator so the runner exits cleanly ──────────
-            # Without this the emulator-runner action waits up to 20 s for a
-            # graceful shutdown that never completes, causing the "Terminate
-            # Emulator / stop: Not implemented" hang seen in CI logs.
+            # adb emu kill sends a graceful shutdown via the emulator console.
+            # This means the emulator-runner's own "Terminate Emulator" step
+            # finds nothing to kill and exits immediately instead of hanging.
             adb -s emulator-5554 emu kill || true
-            sleep 3
-            pkill -9 -f "qemu-system" || true
 
       # -----------------------------------------------------------------------
       # 11. Upload pytest-html report as a build artifact (always runs)
