@@ -149,5 +149,11 @@ def driver():
     d.activate_app("org.tasks")
     # CI needs more time after activation for the app to fully render.
     time.sleep(6 if IS_CI else 2)
+    # In CI every cold-start of the app can land back on the onboarding
+    # screen (the SharedPreferences bypass is not 100% reliable across
+    # terminate→activate cycles).  Dismiss it here so every test starts
+    # from the home screen.  Local runs are unaffected (IS_CI is False).
+    if IS_CI:
+        _dismiss_onboarding(d)
     yield d
     d.quit()
