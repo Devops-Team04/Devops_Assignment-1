@@ -47,14 +47,13 @@ jobs:
 
       - name: Install Appium and UiAutomator2 driver
         run: |
-          npm install -g appium@latest
+          npm install -g appium
           appium driver install uiautomator2
 
       - name: Download Tasks.org APK
         run: |
-          wget -q -O org.tasks_141400.apk \
-            "https://f-droid.org/repo/org.tasks_141400.apk"
-          ls -lh org.tasks_141400.apk
+          wget -q -O org.tasks.apk https://f-droid.org/repo/org.tasks_141400.apk
+          ls -lh org.tasks.apk
 
       - name: Run Appium tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -64,71 +63,25 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           avd-name: test_avd
+          disable-animations: true
           emulator-options: >-
-            -no-snapshot-load
-            -no-snapshot-save
             -no-window
             -gpu swiftshader_indirect
             -noaudio
             -no-boot-anim
-            -delay-adb
-          disable-animations: true
+            -no-snapshot
           script: |
             set -e
 
-            # ── Step 1: gain root access ──────────────────────────────────────
-            adb root || true
-            sleep 3
+            adb wait-for-device
+            adb install -r org.tasks.apk
 
-            # ── Step 2: install the APK ───────────────────────────────────────
-            adb -s emulator-5554 install -r "${GITHUB_WORKSPACE}/org.tasks_141400.apk"
-
-            # ── Step 3: pre-grant runtime permissions ─────────────────────────
-            adb -s emulator-5554 shell pm grant org.tasks android.permission.POST_NOTIFICATIONS
-
-            # ── Step 4: skip first-run onboarding via SharedPreferences ───────
-            adb -s emulator-5554 shell mkdir -p /data/data/org.tasks/shared_prefs
-            printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n<boolean name="p_first_start" value="false" />\n</map>\n' > /tmp/org_tasks_prefs.xml
-            adb -s emulator-5554 push /tmp/org_tasks_prefs.xml /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
-            adb -s emulator-5554 shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml'
-            adb -s emulator-5554 shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs'
-            echo '=== SharedPreferences written ==='
-
-            # ── Step 5: return adbd to non-root mode ──────────────────────────
-            adb unroot || true
-            sleep 2
-            adb -s emulator-5554 wait-for-device
-            adb -s emulator-5554 shell getprop sys.boot_completed
-            sleep 2
-
-            # ── Step 5.2: pre-launch app and dismiss onboarding ───────────────
-            adb -s emulator-5554 shell am start -n org.tasks/com.todoroo.astrid.activity.MainActivity
-            sleep 10
-
-            adb -s emulator-5554 shell input tap 540 1700
-            sleep 3
-            adb -s emulator-5554 shell input tap 540 1700
-            sleep 3
-            adb -s emulator-5554 shell input tap 540 1700
-            sleep 3
-
-            adb -s emulator-5554 shell am force-stop org.tasks
-            sleep 2
-
-            # ── Step 5.3: pre-test screenshot ─────────────────────────────────
-            adb -s emulator-5554 shell screencap -p /sdcard/pre_test.png
-            adb -s emulator-5554 pull /sdcard/pre_test.png "${GITHUB_WORKSPACE}/pre_test.png" || true
-            echo '=== Pre-launch done ==='
-
-            # ── Step 5.4: start Appium ────────────────────────────────────────
-            appium --log "${GITHUB_WORKSPACE}/appium.log" --log-level info &
+            appium --log appium.log --log-level info &
             sleep 20
-            curl -sSf http://127.0.0.1:4723/status && echo "Appium is ready." || echo "WARNING: Appium health-check failed"
 
-            # ── Step 6: run the test suite ────────────────────────────────────
             pytest tests/ -v -s --html=reports/report.html --self-contained-html
 
-      - name: Kill Appium process (graceful shutdown)
+      - name: Kill Appium process
         if: always()
         run: |
           pkill -f "appium" || true
@@ -140,20 +93,10 @@ jobs:
         with:
           name: pytest-html-report
           path: reports/report.html
-          retention-days: 14
 
       - name: Upload Appium log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: appium-log
-          path: appium.log
-          retention-days: 7
-
-      - name: Upload pre-test screenshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pre-test-screenshot
-          path: pre_test.png
-          retention-days: 7
+          path: appium.log 
