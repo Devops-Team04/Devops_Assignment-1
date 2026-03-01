@@ -13,7 +13,7 @@ jobs:
     name: Run Pytest + Appium on Android Emulator
     runs-on: ubuntu-latest
     env:
-      ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: 5  # prevents stop: Not implemented warning
+      ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: 5
 
     steps:
       - name: Checkout repository
@@ -58,7 +58,7 @@ jobs:
           ls -lh org.tasks.apk
 
       - name: Run Appium tests on Android Emulator
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@v3-beta
         with:
           api-level: 33
           target: google_apis
@@ -71,24 +71,42 @@ jobs:
             -gpu swiftshader_indirect
             -noaudio
             -no-boot-anim
-            -no-snapshot-save
-            -no-snapshot-load
           script: |
             set -e
 
+            # Wait for emulator to boot
             adb wait-for-device
+
+            # Install APK
             adb install -r org.tasks.apk
 
-            appium --log appium.log --log-level info &
-            sleep 20
+            # Pre-grant permissions (notifications)
+            adb shell pm grant org.tasks android.permission.POST_NOTIFICATIONS || true
 
+            # Skip first-run onboarding using SharedPreferences
+            adb shell mkdir -p /data/data/org.tasks/shared_prefs
+            printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n<boolean name="p_first_start" value="false" />\n</map>\n' > /tmp/org_tasks_prefs.xml
+            adb push /tmp/org_tasks_prefs.xml /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
+            adb shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml'
+            adb shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs'
+            echo "✅ Pre-launch onboarding skipped"
+
+            # Start Appium server
+            appium --log appium.log --log-level info &
+            sleep 10  # reduced from 20s
+
+            # Pre-launch app to home screen
+            adb shell am start -n org.tasks/com.todoroo.astrid.activity.MainActivity
+            sleep 5  # reduced from 10s
+
+            # Run Pytest tests
             pytest tests/ -v -s --html=reports/report.html --self-contained-html
 
       - name: Kill Appium process
         if: always()
         run: |
           pkill -f "appium" || true
-          sleep 2
+          sleep 1
 
       - name: Upload test report
         if: always()
