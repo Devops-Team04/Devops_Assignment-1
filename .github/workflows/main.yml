@@ -113,24 +113,7 @@ jobs:
           ls -lh org.tasks_141400.apk
 
       # -----------------------------------------------------------------------
-      # 9. Start Appium server in the background
-      # -----------------------------------------------------------------------
-      - name: Start Appium server
-        run: |
-          appium --log appium.log --log-level info &
-          # Wait until Appium is ready
-          for i in $(seq 1 15); do
-            if curl -sSf http://127.0.0.1:4723/status > /dev/null 2>&1; then
-              echo "Appium server is up."
-              exit 0
-            fi
-            echo "Waiting for Appium… attempt $i/15"
-            sleep 2
-          done
-          echo "Appium did not start in time." && exit 1
-
-      # -----------------------------------------------------------------------
-      # 10. Boot Android emulator and run tests
+      # 9. Boot Android emulator and run tests
       #    The `android-emulator-runner` action:
       #      - Installs required system images automatically.
       #      - Creates an AVD, boots it, waits for the boot animation to finish.
@@ -186,14 +169,10 @@ jobs:
             adb -s emulator-5554 shell getprop sys.boot_completed
             sleep 2
 
-            # ── Step 5.2: ensure Appium is running inside this step's shell ──
-            # The emulator-runner action runs each script line as a separate
-            # /usr/bin/sh -c call, so multi-line if/fi or for/done constructs
-            # CANNOT be used. Use only single-line sequential commands.
-            pkill -f appium || true
+            # ── Step 5.2: start Appium server (only started here, not in a prior step) ──
             appium --log appium.log --log-level info &
             sleep 20
-            curl -sSf http://127.0.0.1:4723/status && echo "Appium is ready." || echo "WARNING: Appium health-check failed - tests may time out"
+            curl -sSf http://127.0.0.1:4723/status && echo "Appium is ready." || echo "WARNING: Appium health-check failed"
 
             # ── Step 6: run the test suite ───────────────────────────────────────
             pytest tests/ -v --html=reports/report.html --self-contained-html
