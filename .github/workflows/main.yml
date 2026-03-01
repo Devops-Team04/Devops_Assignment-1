@@ -141,14 +141,7 @@ jobs:
             -noaudio
             -no-boot-anim
           disable-animations: true
-          script: |
-            # Override the APK path in conftest via environment variable so we
-            # do not have to hard-code a CI-specific path inside the source file.
-            export TASKS_APK_PATH="$GITHUB_WORKSPACE/org.tasks_141400.apk"
-            pytest tests/ \
-              -v \
-              --html=reports/report.html \
-              --self-contained-html
+          script: TASKS_APK_PATH="${GITHUB_WORKSPACE}/org.tasks_141400.apk" pytest tests/ -v --html=reports/report.html --self-contained-html
 
       # -----------------------------------------------------------------------
       # 9. Upload pytest-html report as a build artifact (always runs)
