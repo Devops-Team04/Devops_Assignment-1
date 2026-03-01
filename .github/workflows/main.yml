@@ -13,7 +13,7 @@ jobs:
     name: Run Pytest + Appium on Android Emulator
     runs-on: ubuntu-latest
     env:
-      ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: 5  # prevents stop: Not implemented warning
+      ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: 5
 
     steps:
       - name: Checkout repository
@@ -79,12 +79,27 @@ jobs:
             adb wait-for-device
             adb install -r org.tasks.apk
 
+            # Appium start karein aur uska Process ID (PID) save kar lein
             appium --log appium.log --log-level info &
-            sleep 20
+            APPIUM_PID=$!
+            sleep 15
 
+            # set +e isliye lagaya taake agar koi test fail bhi ho, 
+            # toh script direct crash na ho aur hum Appium ko theek se band kar sakein
+            set +e
             pytest tests/ -v -s --html=reports/report.html --self-contained-html
+            TEST_EXIT_CODE=$?
+            set -e
 
-      - name: Kill Appium process
+            # Tests run hone ke baad Appium ko kill kar dein
+            echo "Tests finished. Killing Appium server..."
+            kill $APPIUM_PID || true
+            sleep 2
+            
+            # Jo bhi pytest ka result tha (pass/fail), wahi exit code return karein
+            exit $TEST_EXIT_CODE
+
+      - name: Kill any leftover Appium process
         if: always()
         run: |
           pkill -f "appium" || true
