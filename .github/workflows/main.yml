@@ -102,7 +102,18 @@ jobs:
           appium driver install uiautomator2
 
       # -----------------------------------------------------------------------
-      # 8. Start Appium server in the background
+      # 8. Download the Tasks.org APK from F-Droid
+      #    The APK is >25 MB so we do NOT commit it to Git.  Instead we
+      #    download the exact version used for testing at CI time.
+      # -----------------------------------------------------------------------
+      - name: Download Tasks.org APK
+        run: |
+          wget -q -O org.tasks_141400.apk \
+            "https://f-droid.org/repo/org.tasks_141400.apk"
+          ls -lh org.tasks_141400.apk
+
+      # -----------------------------------------------------------------------
+      # 9. Start Appium server in the background
       # -----------------------------------------------------------------------
       - name: Start Appium server
         run: |
@@ -119,7 +130,7 @@ jobs:
           echo "Appium did not start in time." && exit 1
 
       # -----------------------------------------------------------------------
-      # 9. Boot Android emulator and run tests
+      # 10. Boot Android emulator and run tests
       #    The `android-emulator-runner` action:
       #      - Installs required system images automatically.
       #      - Creates an AVD, boots it, waits for the boot animation to finish.
@@ -144,7 +155,7 @@ jobs:
           script: TASKS_APK_PATH="${GITHUB_WORKSPACE}/org.tasks_141400.apk" pytest tests/ -v --html=reports/report.html --self-contained-html
 
       # -----------------------------------------------------------------------
-      # 9. Upload pytest-html report as a build artifact (always runs)
+      # 11. Upload pytest-html report as a build artifact (always runs)
       # -----------------------------------------------------------------------
       - name: Upload test report
         if: always()
@@ -155,7 +166,7 @@ jobs:
           retention-days: 14
 
       # -----------------------------------------------------------------------
-      # 10. Upload Appium log for debugging on failure
+      # 12. Upload Appium log for debugging on failure
       # -----------------------------------------------------------------------
       - name: Upload Appium log
         if: failure()
