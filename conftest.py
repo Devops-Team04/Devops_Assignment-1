@@ -37,17 +37,19 @@ def get_options() -> UiAutomator2Options:
 def _dismiss_onboarding(driver) -> None:
     """
     Attempt to dismiss any first-run dialogs / onboarding screens that
-    Tasks.org shows on a fresh install.  Tries common button labels;
-    safe to call even when no dialogs are present.
+    Tasks.org shows on a fresh install.  Tries exact text, textContains,
+    and coordinate taps as fallback; safe to call when no dialogs present.
     """
     dismiss_texts = [
         "GET IT", "Get it", "GET STARTED", "Get started",
         "SKIP", "Skip", "OK", "Ok", "ALLOW", "Allow",
         "CONTINUE", "Continue", "DONE", "Done",
         "AGREE", "Agree", "NEXT", "Next", "ACCEPT", "Accept",
+        "BEGIN", "Begin", "START", "Start", "CLOSE", "Close",
     ]
-    for _ in range(8):          # up to 8 passes to clear stacked dialogs
+    for pass_num in range(10):      # up to 10 passes to clear stacked dialogs
         dismissed = False
+        # Strategy 1: exact text match
         for label in dismiss_texts:
             try:
                 btn = driver.find_element(
@@ -55,13 +57,44 @@ def _dismiss_onboarding(driver) -> None:
                     f'new UiSelector().text("{label}")'
                 )
                 btn.click()
-                time.sleep(0.8)
+                time.sleep(1.0)
                 dismissed = True
+                print(f"[onboarding] dismissed via exact text: '{label}' (pass {pass_num})")
                 break
             except (NoSuchElementException, Exception):
                 continue
-        if not dismissed:
-            break   # nothing left to dismiss
+        if dismissed:
+            continue
+        # Strategy 2: textContains for partial matches
+        for fragment in ["Get", "Start", "Skip", "Continue", "Accept", "Allow", "Next"]:
+            try:
+                btn = driver.find_element(
+                    AppiumBy.ANDROID_UIAUTOMATOR,
+                    f'new UiSelector().textContains("{fragment}")'
+                )
+                btn.click()
+                time.sleep(1.0)
+                dismissed = True
+                print(f"[onboarding] dismissed via textContains: '{fragment}' (pass {pass_num})")
+                break
+            except (NoSuchElementException, Exception):
+                continue
+        if dismissed:
+            continue
+        # Strategy 3: coordinate tap at bottom-centre (common button position)
+        # Nexus 6 profile: 1440 x 2560  → centre-bottom ≈ (720, 2050)
+        if pass_num < 3:
+            try:
+                size = driver.get_window_size()
+                cx = size['width'] // 2
+                cy = int(size['height'] * 0.80)
+                driver.tap([(cx, cy)])
+                time.sleep(1.0)
+                print(f"[onboarding] coordinate tap at ({cx},{cy}) (pass {pass_num})")
+                continue   # keep trying passes after a coord tap
+            except Exception:
+                pass
+        break   # nothing dismissed and no coord tap — done
     time.sleep(1)
 
 
@@ -81,14 +114,22 @@ def setup_app_once():
         yield
         return          # skip entirely on local machines
 
+    # Primary onboarding bypass is handled by the CI workflow script:
+    # it writes org.tasks_preferences.xml with p_first_start=false via
+    # `adb root` before pytest runs.  This fixture is a safety-net in case
+    # the SharedPreferences approach doesn't cover all dialogs.
+    print("[setup_app_once] Starting onboarding safety-net session...")
     d = None
     try:
         d = webdriver.Remote(APPIUM_URL, options=get_options())
-        d.implicitly_wait(5)
-        time.sleep(5)           # give the app time to fully render
+        d.implicitly_wait(10)
+        print("[setup_app_once] Appium session opened. Waiting 12s for app to render...")
+        time.sleep(12)          # give the app extra time to fully render
         _dismiss_onboarding(d)
-    except Exception:
-        pass            # never fail the whole session over onboarding
+        print("[setup_app_once] Onboarding dismissal complete.")
+    except Exception as exc:
+        # Log the error so it appears in CI logs for diagnosis
+        print(f"[setup_app_once] WARNING: exception during onboarding dismissal: {exc}")
     finally:
         if d is not None:
             try:
@@ -99,7 +140,8 @@ def setup_app_once():
                 d.quit()
             except Exception:
                 pass    # session may already be gone — that's fine
-    time.sleep(1)
+    print("[setup_app_once] Done. Handing off to individual tests.")
+    time.sleep(2)
     yield
 
 

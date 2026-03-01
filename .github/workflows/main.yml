@@ -152,9 +152,36 @@ jobs:
             -noaudio
             -no-boot-anim
           disable-animations: true
-          script: >-
-            adb -s emulator-5554 install -r "${GITHUB_WORKSPACE}/org.tasks_141400.apk" &&
-            adb -s emulator-5554 shell pm grant org.tasks android.permission.POST_NOTIFICATIONS &&
+          script: |
+            set -e
+
+            # ── Step 1: gain root access (always available on google_apis images) ──
+            adb root || true
+            sleep 3
+
+            # ── Step 2: install the APK ──────────────────────────────────────────
+            adb -s emulator-5554 install -r "${GITHUB_WORKSPACE}/org.tasks_141400.apk"
+
+            # ── Step 3: pre-grant runtime permissions ────────────────────────────
+            adb -s emulator-5554 shell pm grant org.tasks android.permission.POST_NOTIFICATIONS
+
+            # ── Step 4: skip first-run onboarding via SharedPreferences ──────────
+            # Tasks.org reads 'p_first_start' from org.tasks_preferences on startup.
+            # Writing it as false before the app ever runs bypasses the onboarding
+            # wizard entirely.  adb root grants write access to /data/data/.
+            # chmod 666 makes the file world-readable so the app UID can open it.
+            adb -s emulator-5554 shell mkdir -p /data/data/org.tasks/shared_prefs
+            printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n<boolean name="p_first_start" value="false" />\n</map>\n' > /tmp/org_tasks_prefs.xml
+            adb -s emulator-5554 push /tmp/org_tasks_prefs.xml /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
+            adb -s emulator-5554 shell chmod 666 /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
+            echo '=== SharedPreferences written ==='
+            adb -s emulator-5554 shell cat /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
+
+            # ── Step 5: return adbd to non-root mode ─────────────────────────────
+            adb unroot || true
+            sleep 2
+
+            # ── Step 6: run the test suite ───────────────────────────────────────
             pytest tests/ -v --html=reports/report.html --self-contained-html
 
       # -----------------------------------------------------------------------
