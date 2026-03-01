@@ -70,28 +70,37 @@ def setup_app_once():
     """
     Session-scoped fixture that runs exactly once per test session.
 
-    In CI the app is freshly installed and has never been launched, so
-    Tasks.org will show its first-run onboarding UI.  This fixture:
-      1. Opens one Appium session (no_reset=True, auto_grant_permissions=True)
-      2. Waits for the app to be ready
-      3. Dismisses any onboarding / permission dialogs
-      4. Quits the session
+    Only active in CI (IS_CI=True).  On a fresh emulator the app will show
+    its first-run onboarding UI; this fixture dismisses it before any test
+    runs.  Locally the app is already set up so this is a no-op.
 
-    After this, all per-test driver fixtures start with the app already
-    initialised and land directly on the My Tasks home screen.
+    All operations are wrapped in try/except so a failure here never blocks
+    the individual per-test fixtures.
     """
-    d = webdriver.Remote(APPIUM_URL, options=get_options())
+    if not IS_CI:
+        yield
+        return          # skip entirely on local machines
+
+    d = None
     try:
-        d.implicitly_wait(5)          # short wait — we just want to dismiss dialogs
-        time.sleep(5)                  # give the app time to fully render
+        d = webdriver.Remote(APPIUM_URL, options=get_options())
+        d.implicitly_wait(5)
+        time.sleep(5)           # give the app time to fully render
         _dismiss_onboarding(d)
+    except Exception:
+        pass            # never fail the whole session over onboarding
     finally:
-        try:
-            d.terminate_app("org.tasks")
-        except Exception:
-            pass
-        d.quit()
+        if d is not None:
+            try:
+                d.terminate_app("org.tasks")
+            except Exception:
+                pass
+            try:
+                d.quit()
+            except Exception:
+                pass    # session may already be gone — that's fine
     time.sleep(1)
+    yield
 
 
 @pytest.fixture
