@@ -187,22 +187,13 @@ jobs:
             sleep 2
 
             # ── Step 5.2: ensure Appium is running inside this step's shell ──
-            # The earlier "Start Appium server" step may not share the same
-            # process namespace with the emulator runner. Start (or verify)
-            # Appium here to avoid connection hangs at the first test.
-            if ! curl -sSf http://127.0.0.1:4723/status > /dev/null 2>&1; then
-              appium --log appium.log --log-level info &
-              for i in $(seq 1 20); do
-                if curl -sSf http://127.0.0.1:4723/status > /dev/null 2>&1; then
-                  echo "Appium server is up (started in script)."
-                  break
-                fi
-                echo "Waiting for Appium… attempt $i/20"
-                sleep 2
-              done
-            else
-              echo "Appium already running (detected on port 4723)."
-            fi
+            # The emulator-runner action runs each script line as a separate
+            # /usr/bin/sh -c call, so multi-line if/fi or for/done constructs
+            # CANNOT be used. Use only single-line sequential commands.
+            pkill -f appium || true
+            appium --log appium.log --log-level info &
+            sleep 20
+            curl -sSf http://127.0.0.1:4723/status && echo "Appium is ready." || echo "WARNING: Appium health-check failed - tests may time out"
 
             # ── Step 6: run the test suite ───────────────────────────────────────
             pytest tests/ -v --html=reports/report.html --self-contained-html
