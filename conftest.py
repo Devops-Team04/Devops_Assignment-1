@@ -37,19 +37,35 @@ def get_options() -> UiAutomator2Options:
 def _dismiss_onboarding(driver) -> None:
     """
     Attempt to dismiss any first-run dialogs / onboarding screens that
-    Tasks.org shows on a fresh install.  Tries exact text, textContains,
-    and coordinate taps as fallback; safe to call when no dialogs present.
+    Tasks.org shows on a fresh install.
+
+    Sets implicit_wait(0) so that each failed element search is instant
+    instead of waiting the full timeout.  This makes scanning through
+    ~20 labels take seconds, not minutes.
     """
+    # Save current implicit wait and set to 0 for fast scanning
+    driver.implicitly_wait(0)
+
+    # Ordered by likelihood for Tasks.org — "Continue without sync" is
+    # the very first onboarding button shown on a fresh install.
     dismiss_texts = [
-        "GET IT", "Get it", "GET STARTED", "Get started",
-        "SKIP", "Skip", "OK", "Ok", "ALLOW", "Allow",
-        "CONTINUE", "Continue", "DONE", "Done",
-        "AGREE", "Agree", "NEXT", "Next", "ACCEPT", "Accept",
-        "BEGIN", "Begin", "START", "Start", "CLOSE", "Close",
+        "Continue without sync",
+        "OK", "Ok",
+        "SKIP", "Skip",
+        "GET STARTED", "Get started",
+        "GET IT", "Get it",
+        "CONTINUE", "Continue",
+        "DONE", "Done",
+        "ALLOW", "Allow",
+        "AGREE", "Agree",
+        "NEXT", "Next",
+        "ACCEPT", "Accept",
+        "BEGIN", "Begin",
+        "START", "Start",
+        "CLOSE", "Close",
     ]
-    for pass_num in range(10):      # up to 10 passes to clear stacked dialogs
+    for pass_num in range(5):      # up to 5 passes to clear stacked dialogs
         dismissed = False
-        # Strategy 1: exact text match
         for label in dismiss_texts:
             try:
                 btn = driver.find_element(
@@ -57,45 +73,17 @@ def _dismiss_onboarding(driver) -> None:
                     f'new UiSelector().text("{label}")'
                 )
                 btn.click()
-                time.sleep(1.0)
+                time.sleep(2)
                 dismissed = True
-                print(f"[onboarding] dismissed via exact text: '{label}' (pass {pass_num})")
+                print(f"[onboarding] dismissed via text: '{label}' (pass {pass_num})")
                 break
             except (NoSuchElementException, Exception):
                 continue
-        if dismissed:
-            continue
-        # Strategy 2: textContains for partial matches
-        for fragment in ["Get", "Start", "Skip", "Continue", "Accept", "Allow", "Next"]:
-            try:
-                btn = driver.find_element(
-                    AppiumBy.ANDROID_UIAUTOMATOR,
-                    f'new UiSelector().textContains("{fragment}")'
-                )
-                btn.click()
-                time.sleep(1.0)
-                dismissed = True
-                print(f"[onboarding] dismissed via textContains: '{fragment}' (pass {pass_num})")
-                break
-            except (NoSuchElementException, Exception):
-                continue
-        if dismissed:
-            continue
-        # Strategy 3: coordinate tap at bottom-centre (common button position)
-        # Nexus 6 profile: 1440 x 2560  → centre-bottom ≈ (720, 2050)
-        if pass_num < 3:
-            try:
-                size = driver.get_window_size()
-                cx = size['width'] // 2
-                cy = int(size['height'] * 0.80)
-                driver.tap([(cx, cy)])
-                time.sleep(1.0)
-                print(f"[onboarding] coordinate tap at ({cx},{cy}) (pass {pass_num})")
-                continue   # keep trying passes after a coord tap
-            except Exception:
-                pass
-        break   # nothing dismissed and no coord tap — done
+        if not dismissed:
+            break   # nothing left to dismiss
     time.sleep(1)
+    # Restore a reasonable implicit wait for the caller
+    driver.implicitly_wait(20 if IS_CI else 10)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -113,16 +101,23 @@ def setup_app_once():
         yield
         return          # skip entirely on local machines
 
-    print("[setup_app_once] Warming up app session in CI...")
+    print("[setup_app_once] Dismissing onboarding on fresh CI emulator...")
     d = None
     try:
         d = webdriver.Remote(APPIUM_URL, options=get_options())
-        # Use a short implicit wait here — we just want the app to launch,
-        # not to search for elements that may or may not exist.
-        d.implicitly_wait(3)
-        print("[setup_app_once] Session opened. Waiting 15s for app to fully render...")
-        time.sleep(15)
-        print(f"[setup_app_once] App is running. Current activity: {d.current_activity}")
+        print("[setup_app_once] Session opened. Waiting 10s for app to fully render...")
+        time.sleep(10)
+        print(f"[setup_app_once] Current activity: {d.current_activity}")
+        # Dump page source for diagnosis (visible in CI pytest output with -s)
+        try:
+            src = d.page_source[:2000]
+            print(f"[setup_app_once] Page source (first 2000 chars):\n{src}")
+        except Exception:
+            pass
+        _dismiss_onboarding(d)
+        print("[setup_app_once] Onboarding dismissal complete.")
+        time.sleep(3)
+        print(f"[setup_app_once] Post-dismissal activity: {d.current_activity}")
     except Exception as exc:
         print(f"[setup_app_once] WARNING: {exc}")
     finally:
@@ -131,7 +126,7 @@ def setup_app_once():
                 d.quit()
             except Exception:
                 pass
-    print("[setup_app_once] Warm-up done.")
+    print("[setup_app_once] Done.")
     time.sleep(2)
     yield
 

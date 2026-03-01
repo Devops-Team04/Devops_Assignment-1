@@ -149,16 +149,14 @@ jobs:
             adb -s emulator-5554 shell pm grant org.tasks android.permission.POST_NOTIFICATIONS
 
             # ── Step 4: skip first-run onboarding via SharedPreferences ──────────
-            # Tasks.org reads 'p_first_start' from org.tasks_preferences on startup.
-            # Writing it as false before the app ever runs bypasses the onboarding
-            # wizard entirely.  adb root grants write access to /data/data/.
-            # chmod 666 makes the file world-readable so the app UID can open it.
+            # Write p_first_start=false and fix file ownership so the app
+            # UID can actually read it (push as root creates root-owned files).
             adb -s emulator-5554 shell mkdir -p /data/data/org.tasks/shared_prefs
             printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n<boolean name="p_first_start" value="false" />\n</map>\n' > /tmp/org_tasks_prefs.xml
             adb -s emulator-5554 push /tmp/org_tasks_prefs.xml /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
-            adb -s emulator-5554 shell chmod 666 /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
-            echo '=== SharedPreferences written ==='
-            adb -s emulator-5554 shell cat /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml
+            adb -s emulator-5554 shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs/org.tasks_preferences.xml'
+            adb -s emulator-5554 shell 'chown $(stat -c "%U:%G" /data/data/org.tasks) /data/data/org.tasks/shared_prefs'
+            echo '=== SharedPreferences written (with correct ownership) ==='
 
             # ── Step 5: return adbd to non-root mode ─────────────────────────────
             adb unroot || true
@@ -169,13 +167,30 @@ jobs:
             adb -s emulator-5554 shell getprop sys.boot_completed
             sleep 2
 
-            # ── Step 5.2: pre-launch app once via adb so it initialises past any ──
-            # remaining first-run screens before Appium even connects.
+            # ── Step 5.2: pre-launch app and dismiss onboarding via adb ────────
+            # Belt-and-suspenders: in addition to SharedPreferences, launch the
+            # app and tap through the first-run onboarding before Appium starts.
+            # The conftest _dismiss_onboarding() in pytest is the primary
+            # mechanism; these taps are a best-effort backup.
             adb -s emulator-5554 shell am start -n org.tasks/com.todoroo.astrid.activity.MainActivity
-            sleep 15
+            sleep 10
+            echo '=== UI dump before onboarding dismissal ==='
+            adb -s emulator-5554 shell uiautomator dump /sdcard/ui_before.xml || true
+            adb -s emulator-5554 shell cat /sdcard/ui_before.xml || true
+            adb -s emulator-5554 shell input tap 540 1700
+            sleep 3
+            adb -s emulator-5554 shell input tap 540 1700
+            sleep 3
+            adb -s emulator-5554 shell input tap 540 1700
+            sleep 3
+            echo '=== UI dump after taps ==='
+            adb -s emulator-5554 shell uiautomator dump /sdcard/ui_after.xml || true
+            adb -s emulator-5554 shell cat /sdcard/ui_after.xml || true
+            adb -s emulator-5554 shell am force-stop org.tasks
+            sleep 2
             adb -s emulator-5554 shell screencap -p /sdcard/pre_test.png
             adb -s emulator-5554 pull /sdcard/pre_test.png pre_test.png || true
-            echo '=== App pre-launch done ==='
+            echo '=== App pre-launch + onboarding dismissal done ==='
 
             # ── Step 5.3: start Appium server (only started here, not in a prior step) ──
             appium --log appium.log --log-level info &
@@ -183,7 +198,8 @@ jobs:
             curl -sSf http://127.0.0.1:4723/status && echo "Appium is ready." || echo "WARNING: Appium health-check failed"
 
             # ── Step 6: run the test suite ───────────────────────────────────────
-            pytest tests/ -v --html=reports/report.html --self-contained-html
+            # -s flag makes print() output visible in CI logs (for debugging)
+            pytest tests/ -v -s --html=reports/report.html --self-contained-html
 
       # -----------------------------------------------------------------------
       # 11. Upload pytest-html report as a build artifact (always runs)
@@ -217,4 +233,22 @@ jobs:
         with:
           name: pre-test-screenshot
           path: pre_test.png
+          retention-days: 7
+
+      # -----------------------------------------------------------------------
+      # 14. Upload UI dump XMLs for debugging onboarding issues
+      # -----------------------------------------------------------------------
+      - name: Pull UI dump XMLs
+        if: always()
+        run: |
+          adb -s emulator-5554 pull /sdcard/ui_before.xml ui_before.xml || true
+          adb -s emulator-5554 pull /sdcard/ui_after.xml ui_after.xml || true
+      - name: Upload UI dumps
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-dumps
+          path: |
+            ui_before.xml
+            ui_after.xml
           retention-days: 7
