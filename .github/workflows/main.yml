@@ -60,6 +60,45 @@ jobs:
       - name: Create reports directory
         run: mkdir -p reports
 
+      # Write the test runner as a real bash script BEFORE the emulator starts.
+      # This avoids all quoting/shell issues since the emulator runner just calls: bash run_tests.sh
+      - name: Write test runner script
+        run: |
+          cat > run_tests.sh << 'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          echo ">>> Waiting for device..."
+          adb wait-for-device
+
+          echo ">>> Installing APK..."
+          adb install -r org.tasks.apk
+
+          echo ">>> Starting Appium server..."
+          appium --log appium.log --log-level info &
+          echo $! > /tmp/appium.pid
+          echo ">>> Appium PID: $(cat /tmp/appium.pid)"
+
+          echo ">>> Waiting for Appium to be ready..."
+          sleep 15
+
+          echo ">>> Running pytest..."
+          set +e
+          pytest tests/ -v -s --html=reports/report.html --self-contained-html
+          TEST_EXIT_CODE=$?
+          set -e
+
+          echo ">>> Tests done (exit code: $TEST_EXIT_CODE). Stopping Appium..."
+          if [ -f /tmp/appium.pid ]; then
+            kill "$(cat /tmp/appium.pid)" 2>/dev/null || true
+            rm -f /tmp/appium.pid
+          fi
+
+          sleep 2
+          exit $TEST_EXIT_CODE
+          SCRIPT
+          chmod +x run_tests.sh
+
       - name: Run Appium tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -76,42 +115,11 @@ jobs:
             -no-boot-anim
             -no-snapshot-save
             -no-snapshot-load
-          script: |
-            bash -c '
-              set -e
-
-              adb wait-for-device
-              adb install -r org.tasks.apk
-
-              # Start Appium and save PID to a file (survives across shell lines)
-              appium --log appium.log --log-level info &
-              echo $! > /tmp/appium.pid
-              echo "Appium started with PID: $(cat /tmp/appium.pid)"
-              sleep 15
-
-              # Run tests, capture exit code without stopping on failure
-              set +e
-              pytest tests/ -v -s --html=reports/report.html --self-contained-html
-              TEST_EXIT_CODE=$?
-              set -e
-
-              # Kill Appium using the saved PID file
-              if [ -f /tmp/appium.pid ]; then
-                echo "Killing Appium (PID: $(cat /tmp/appium.pid))..."
-                kill "$(cat /tmp/appium.pid)" 2>/dev/null || true
-                rm -f /tmp/appium.pid
-              fi
-              sleep 2
-
-              echo "Exiting with test exit code: $TEST_EXIT_CODE"
-              exit $TEST_EXIT_CODE
-            '
+          script: bash run_tests.sh
 
       - name: Kill any leftover Appium process
         if: always()
-        run: |
-          pkill -f "appium" || true
-          sleep 2
+        run: pkill -f "appium" || true
 
       - name: Upload test report
         if: always()
