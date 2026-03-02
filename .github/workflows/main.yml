@@ -57,6 +57,9 @@ jobs:
           wget -q -O org.tasks.apk https://f-droid.org/repo/org.tasks_141400.apk
           ls -lh org.tasks.apk
 
+      - name: Create reports directory
+        run: mkdir -p reports
+
       - name: Run Appium tests on Android Emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -74,30 +77,35 @@ jobs:
             -no-snapshot-save
             -no-snapshot-load
           script: |
-            set -e
+            bash -c '
+              set -e
 
-            adb wait-for-device
-            adb install -r org.tasks.apk
+              adb wait-for-device
+              adb install -r org.tasks.apk
 
-            # Appium start karein aur uska Process ID (PID) save kar lein
-            appium --log appium.log --log-level info &
-            APPIUM_PID=$!
-            sleep 15
+              # Start Appium and save PID to a file (survives across shell lines)
+              appium --log appium.log --log-level info &
+              echo $! > /tmp/appium.pid
+              echo "Appium started with PID: $(cat /tmp/appium.pid)"
+              sleep 15
 
-            # set +e isliye lagaya taake agar koi test fail bhi ho, 
-            # toh script direct crash na ho aur hum Appium ko theek se band kar sakein
-            set +e
-            pytest tests/ -v -s --html=reports/report.html --self-contained-html
-            TEST_EXIT_CODE=$?
-            set -e
+              # Run tests, capture exit code without stopping on failure
+              set +e
+              pytest tests/ -v -s --html=reports/report.html --self-contained-html
+              TEST_EXIT_CODE=$?
+              set -e
 
-            # Tests run hone ke baad Appium ko kill kar dein
-            echo "Tests finished. Killing Appium server..."
-            kill $APPIUM_PID || true
-            sleep 2
-            
-            # Jo bhi pytest ka result tha (pass/fail), wahi exit code return karein
-            exit $TEST_EXIT_CODE
+              # Kill Appium using the saved PID file
+              if [ -f /tmp/appium.pid ]; then
+                echo "Killing Appium (PID: $(cat /tmp/appium.pid))..."
+                kill "$(cat /tmp/appium.pid)" 2>/dev/null || true
+                rm -f /tmp/appium.pid
+              fi
+              sleep 2
+
+              echo "Exiting with test exit code: $TEST_EXIT_CODE"
+              exit $TEST_EXIT_CODE
+            '
 
       - name: Kill any leftover Appium process
         if: always()
